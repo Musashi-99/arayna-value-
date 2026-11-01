@@ -25,10 +25,11 @@ function cleanupDbFiles() {
 }
 
 function seedMinimalBatch(batchId) {
-  db.exec(`INSERT OR IGNORE INTO beekeepers (id, name, verified) VALUES ('BK-X','X',1)`);
-  db.exec(`INSERT OR IGNORE INTO apiaries (id, beekeeper_id) VALUES ('AP-X','BK-X')`);
-  db.exec(`INSERT OR IGNORE INTO harvests (id, hive_ids, beekeeper_id, date, quantity_kg) VALUES ('HV-X','[]','BK-X','2026-01-01',1)`);
-  db.prepare(`INSERT INTO batches (id, batch_code, harvest_id, created_at) VALUES (?, ?, 'HV-X', '2026-01-01')`)
+  db.exec(`INSERT OR IGNORE INTO states (id, name, code, languages, is_active) VALUES ('ST-T','Test','TT','["en"]',1)`);
+  db.exec(`INSERT OR IGNORE INTO districts (id, state_id, name, is_active) VALUES ('DT-T','ST-T','Test',1)`);
+  db.exec(`INSERT OR IGNORE INTO users (id, name, email, password_hash, role, created_at) VALUES ('U-T','T','t@test.local','x','collector','2026-01-01')`);
+  db.exec(`INSERT OR IGNORE INTO products (id, name, category, default_unit, is_active) VALUES ('PR-T','Test','other','kg',1)`);
+  db.prepare(`INSERT INTO batches (id, batch_code, product_id, collector_id, state_id, district_id, quantity, unit, collection_date, status, created_at, updated_at) VALUES (?, ?, 'PR-T', 'U-T', 'ST-T', 'DT-T', 1, 'kg', '2026-01-01', 'draft', '2026-01-01', '2026-01-01')`)
     .run(batchId, batchId + '-CODE');
 }
 

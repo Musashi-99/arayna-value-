@@ -34,10 +34,11 @@ const db = require('../db/db');
 const { verifyChain } = require('../services/ledger');
 
 test.before(() => {
-  db.exec(`INSERT INTO beekeepers (id, name, verified) VALUES ('BK-CONC','Concurrency Test',1)`);
-  db.exec(`INSERT INTO apiaries (id, beekeeper_id) VALUES ('AP-CONC','BK-CONC')`);
-  db.exec(`INSERT INTO harvests (id, hive_ids, beekeeper_id, date, quantity_kg) VALUES ('HV-CONC','[]','BK-CONC','2026-01-01',1)`);
-  db.exec(`INSERT INTO batches (id, batch_code, harvest_id, created_at) VALUES ('BT-CONC','CODE-CONC','HV-CONC','2026-01-01')`);
+  db.exec(`INSERT INTO states (id, name, code, languages, is_active) VALUES ('ST-T','Test','TT','["en"]',1)`);
+  db.exec(`INSERT INTO districts (id, state_id, name, is_active) VALUES ('DT-T','ST-T','Test',1)`);
+  db.exec(`INSERT INTO users (id, name, email, password_hash, role, created_at) VALUES ('U-T','T','t@test.local','x','collector','2026-01-01')`);
+  db.exec(`INSERT INTO products (id, name, category, default_unit, is_active) VALUES ('PR-T','Test','other','kg',1)`);
+  db.exec(`INSERT INTO batches (id, batch_code, product_id, collector_id, state_id, district_id, quantity, unit, collection_date, status, created_at, updated_at) VALUES ('BT-CONC','CODE-CONC','PR-T','U-T','ST-T','DT-T',1,'kg','2026-01-01','draft','2026-01-01','2026-01-01')`);
 });
 
 test.after(() => {

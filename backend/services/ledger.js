@@ -48,25 +48,27 @@ function getLastEvent() {
  * but that's an implicit property of there being no `await` in this
  * function, not a real guarantee, and it doesn't hold across processes at all.
  */
-function appendEvent({ batch_id, event_type, actor, payload }) {
-  const run = db.transaction(() => {
-    const last = getLastEvent();
-    const seq = last ? last.seq + 1 : 1;
-    const prev_hash = last ? last.hash : GENESIS_HASH;
-    const timestamp = new Date().toISOString();
+function insertEvent({ batch_id, event_type, actor, payload }) {
+  const last = getLastEvent();
+  const seq = last ? last.seq + 1 : 1;
+  const prev_hash = last ? last.hash : GENESIS_HASH;
+  const timestamp = new Date().toISOString();
 
-    const eventForHash = { batch_id, event_type, actor, payload, timestamp };
-    const hash = sha256(prev_hash + canonicalize(eventForHash));
+  const eventForHash = { batch_id, event_type, actor, payload, timestamp };
+  const hash = sha256(prev_hash + canonicalize(eventForHash));
 
-    const id = uuidv4();
-    db.prepare(`
-      INSERT INTO batch_events (id, seq, batch_id, event_type, actor, payload, timestamp, prev_hash, hash)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, seq, batch_id, event_type, actor || null, JSON.stringify(payload || {}), timestamp, prev_hash, hash);
+  const id = uuidv4();
+  db.prepare(`
+    INSERT INTO batch_events (id, seq, batch_id, event_type, actor, payload, timestamp, prev_hash, hash)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, seq, batch_id, event_type, actor || null, JSON.stringify(payload || {}), timestamp, prev_hash, hash);
 
-    return { id, seq, batch_id, event_type, actor, payload, timestamp, prev_hash, hash };
-  }, { immediate: true });
+  return { id, seq, batch_id, event_type, actor, payload, timestamp, prev_hash, hash };
+}
 
+function appendEvent(event, options = {}) {
+  if (options.inTransaction) return insertEvent(event);
+  const run = db.transaction(() => insertEvent(event), { immediate: true });
   return run();
 }
 

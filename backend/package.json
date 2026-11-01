@@ -1,7 +1,7 @@
 {
-  "name": "honey-chain-backend",
+  "name": "aranyavalue-backend",
   "version": "0.1.0",
-  "description": "Honey Chain MVP backend - hive, harvest, batch, ledger, QR API",
+  "description": "AranyaValue API — forest produce quality passports and price explanation",
   "main": "server.js",
   "type": "commonjs",
   "engines": {

@@ -7,6 +7,10 @@ dist/
 backend/db/honeychain.db
 backend/db/honeychain.db-shm
 backend/db/honeychain.db-wal
+backend/db/aranyavalue.db
+backend/db/aranyavalue.db-shm
+backend/db/aranyavalue.db-wal
+backend/uploads/
 backend/test/tmp-*.db
 backend/test/tmp-*.db-shm
 backend/test/tmp-*.db-wal

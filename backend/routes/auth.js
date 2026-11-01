@@ -1,120 +1,127 @@
 const express = require('express');
-const { v4: uuidv4 } = require('uuid');
+const { v4: uuid } = require('uuid');
 const db = require('../db/db');
 const { hashPassword, verifyPassword, signToken } = require('../services/auth');
 const { requireAuth, COOKIE_NAME } = require('../middleware/auth');
+const { cookieOptions } = require('../services/session');
 
 const router = express.Router();
 
-const COOKIE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days, matches token expiry in services/auth.js
-
-function cookieOptions() {
-  const isProd = process.env.NODE_ENV === 'production';
-  return {
-    httpOnly: true,
-    sameSite: isProd ? 'none' : 'lax', // cross-site cookies need SameSite=None, which requires...
-    secure: isProd,                     // ...Secure, which requires HTTPS - fine in prod, not needed on localhost
-    maxAge: COOKIE_MAX_AGE_MS,
-    path: '/',
-  };
-}
-
-function publicUser(user, beekeeper) {
+function publicUser(user) {
   return {
     id: user.id,
+    name: user.name,
     email: user.email,
+    phone: user.phone || null,
     role: user.role,
-    beekeeper: beekeeper
-      ? { id: beekeeper.id, name: beekeeper.name, district: beekeeper.district, state: beekeeper.state, verified: !!beekeeper.verified }
-      : null,
+    preferred_language: user.preferred_language || 'en',
+    state_id: user.state_id || null,
+    district_id: user.district_id || null,
+    organisation: user.organisation || null,
+    centre_id: user.centre_id || null,
+    is_demo: !!user.is_demo,
+    created_at: user.created_at || null,
+    profile: parseProfile(user.profile_json),
   };
 }
 
-// POST /api/auth/register - beekeeper self-registration ONLY. Lab/admin
-// accounts are provisioned via db/seed.js (see Decision 2: no in-app staff
-// management UI for this MVP).
+function parseProfile(value) {
+  try { return value ? JSON.parse(value) : {}; } catch { return {}; }
+}
+
 router.post('/register', (req, res) => {
-  const { name, email, password, district, state, phone } = req.body;
-
-  if (!name || !email || !password) {
-    return res.status(400).json({ error: 'name, email and password are required.' });
+  const { name, email, password, phone, role, state_id, district_id, organisation, preferred_language } = req.body || {};
+  if (!name || !email || !password) return res.status(400).json({ error: 'Name, email, and password are required.' });
+  if (String(password).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+  const allowed = role === 'buyer' ? 'buyer' : 'collector';
+  if (role && !['buyer', 'collector'].includes(role)) {
+    return res.status(400).json({ error: 'Self-registration is open to collectors and buyers. Other roles are created by an administrator.' });
   }
-  if (password.length < 8) {
-    return res.status(400).json({ error: 'Password must be at least 8 characters.' });
-  }
-
-  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email.toLowerCase());
-  if (existing) {
-    return res.status(409).json({ error: 'An account with that email already exists.' });
-  }
-
-  if (phone) {
-    const phoneTaken = db.prepare('SELECT id FROM beekeepers WHERE phone = ?').get(phone);
-    if (phoneTaken) {
-      return res.status(409).json({ error: 'An account with that phone number already exists.' });
-    }
-  }
-
-  const beekeeperId = 'BK-' + uuidv4().slice(0, 6).toUpperCase();
-  const apiaryId = 'AP-' + uuidv4().slice(0, 6).toUpperCase();
-  const userId = 'U-' + uuidv4().slice(0, 8).toUpperCase();
-  const passwordHash = hashPassword(password);
+  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(String(email).toLowerCase());
+  if (existing) return res.status(409).json({ error: 'An account with that email already exists.' });
+  const id = `U-${uuid().slice(0, 8).toUpperCase()}`;
   const now = new Date().toISOString();
-
-  const createAll = db.transaction(() => {
-    // verified=0 by default (schema default) - pending Cluster Admin approval
-    db.prepare('INSERT INTO beekeepers (id, name, district, state, phone) VALUES (?, ?, ?, ?, ?)')
-      .run(beekeeperId, name, district || null, state || null, phone || null);
-    db.prepare('INSERT INTO apiaries (id, beekeeper_id, name, location) VALUES (?, ?, ?, ?)')
-      .run(apiaryId, beekeeperId, 'Main Apiary', district && state ? `${district}, ${state}` : null);
-    db.prepare('INSERT INTO users (id, email, password_hash, role, beekeeper_id, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(userId, email.toLowerCase(), passwordHash, 'beekeeper', beekeeperId, now);
-  });
-  createAll();
-
-  const token = signToken({ userId, role: 'beekeeper' });
-  res.cookie(COOKIE_NAME, token, cookieOptions());
-
-  const beekeeper = db.prepare('SELECT * FROM beekeepers WHERE id = ?').get(beekeeperId);
-  res.status(201).json({
-    user: publicUser({ id: userId, email: email.toLowerCase(), role: 'beekeeper' }, beekeeper),
-    message: 'Registered. Your account is pending Cluster Admin verification before you can record harvests.',
-  });
+  db.prepare(`
+    INSERT INTO users (id, name, email, phone, password_hash, role, preferred_language, state_id, district_id, organisation, active, is_demo, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?)
+  `).run(id, name.trim(), String(email).toLowerCase(), phone || null, hashPassword(password), allowed, preferred_language || 'en', state_id || null, district_id || null, organisation || null, now);
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+  res.cookie(COOKIE_NAME, signToken({ userId: id, role: allowed }), cookieOptions());
+  res.status(201).json({ user: publicUser(user) });
 });
 
-// POST /api/auth/login
-router.post('/login', (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) {
-    return res.status(400).json({ error: 'email and password are required.' });
-  }
+// Demo convenience: outside production, any email + password signs in.
+// Unknown emails get a collector account created on the fly; known emails sign in without a password check.
+const OPEN_LOGIN = process.env.NODE_ENV !== 'production' && process.env.OPEN_LOGIN !== 'off';
 
-  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email.toLowerCase());
-  if (!user || !verifyPassword(password, user.password_hash)) {
+router.post('/login', (req, res) => {
+  const { email, password, portal } = req.body || {};
+  if (!email || !password) return res.status(400).json({ error: 'Email and password are required.' });
+  const mail = String(email).toLowerCase().trim();
+  let user = db.prepare('SELECT * FROM users WHERE email = ?').get(mail);
+  // The login tab is only a hint. Officer sign-in never auto-creates accounts.
+  if (portal === 'officer' && !user) return res.status(401).json({ error: 'Invalid email or password.' });
+  // Buyer sign-in never creates accounts either. Buyers register explicitly, or use the clearly labelled Demo Buyer access.
+  if (portal === 'buyer' && !user) return res.status(401).json({ error: 'No buyer account found for that email. Create a buyer account, or use Demo Buyer access.' });
+  // Officer/admin accounts always require a real password check, even in demo mode.
+  const privileged = user && ['inspector', 'admin'].includes(user.role);
+  // Buyers always need a real password. Arbitrary credentials never create or enter a buyer account;
+  // the labelled Demo Buyer endpoint is the only passwordless buyer path.
+  if (OPEN_LOGIN && !privileged && !(user && user.role === 'buyer')) {
+    if (!user) {
+      const id = `U-${uuid().slice(0, 8).toUpperCase()}`;
+      const name = mail.split('@')[0].replace(/[._-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) || 'New Collector';
+      db.prepare(`
+        INSERT INTO users (id, name, email, password_hash, role, preferred_language, state_id, district_id, active, is_demo, created_at)
+        VALUES (?, ?, ?, ?, 'collector', 'en', 'ST-WB', 'DT-PUR', 1, 0, ?)
+      `).run(id, name, mail, hashPassword(String(password)), new Date().toISOString());
+      user = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+    }
+    if (!user.active) return res.status(401).json({ error: 'Invalid email or password.' });
+  } else if (!user || !verifyPassword(password, user.password_hash) || !user.active) {
     return res.status(401).json({ error: 'Invalid email or password.' });
   }
-
-  const token = signToken({ userId: user.id, role: user.role });
-  res.cookie(COOKIE_NAME, token, cookieOptions());
-
-  const beekeeper = user.beekeeper_id
-    ? db.prepare('SELECT * FROM beekeepers WHERE id = ?').get(user.beekeeper_id)
-    : null;
-  res.json({ user: publicUser(user, beekeeper) });
+  // Credentials are valid; now make sure they belong to the portal that was chosen.
+  const PORTAL_ROLES = { collector: ['collector', 'centre'], buyer: ['buyer'], officer: ['inspector', 'admin'] };
+  const PORTAL_NAMES = { collector: 'Collector / Producer', buyer: 'Buyer', officer: 'Government Officer' };
+  if (portal && PORTAL_ROLES[portal] && !PORTAL_ROLES[portal].includes(user.role)) {
+    return res.status(403).json({ error: `This account is not a ${PORTAL_NAMES[portal]} account. Choose the correct login option.` });
+  }
+  res.cookie(COOKIE_NAME, signToken({ userId: user.id, role: user.role }), cookieOptions());
+  res.json({ user: publicUser(user) });
 });
 
-// POST /api/auth/logout
 router.post('/logout', (req, res) => {
   res.clearCookie(COOKIE_NAME, { path: '/' });
   res.json({ ok: true });
 });
 
-// GET /api/auth/me - used by the frontend on load to restore a session
 router.get('/me', requireAuth, (req, res) => {
-  const beekeeper = req.user.beekeeper_id
-    ? db.prepare('SELECT * FROM beekeepers WHERE id = ?').get(req.user.beekeeper_id)
-    : null;
-  res.json({ user: publicUser(req.user, beekeeper) });
+  res.json({ user: publicUser(req.user) });
+});
+
+router.patch('/me', requireAuth, (req, res) => {
+  const { name, phone, preferred_language, state_id, district_id, organisation, profile } = req.body || {};
+  if (name !== undefined && !String(name).trim()) return res.status(400).json({ error: 'Name cannot be empty.' });
+  let profileJson = null;
+  if (profile && typeof profile === 'object') {
+    const merged = { ...parseProfile(req.user.profile_json), ...profile };
+    profileJson = JSON.stringify(merged);
+    if (profileJson.length > 4000) return res.status(400).json({ error: 'Profile data is too large.' });
+  }
+  db.prepare(`
+    UPDATE users SET
+      name = COALESCE(?, name),
+      phone = COALESCE(?, phone),
+      preferred_language = COALESCE(?, preferred_language),
+      state_id = COALESCE(?, state_id),
+      district_id = COALESCE(?, district_id),
+      organisation = COALESCE(?, organisation),
+      profile_json = COALESCE(?, profile_json)
+    WHERE id = ?
+  `).run(name || null, phone || null, preferred_language || null, state_id || null, district_id || null, organisation || null, profileJson, req.user.id);
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  res.json({ user: publicUser(user) });
 });
 
 module.exports = router;
